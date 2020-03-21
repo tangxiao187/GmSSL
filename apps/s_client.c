@@ -542,7 +542,10 @@ typedef enum OPTION_choice {
     OPT_TLS1_2, OPT_TLS1_1, OPT_TLS1, OPT_DTLS, OPT_DTLS1,
     OPT_GMTLS,
     OPT_DTLS1_2, OPT_TIMEOUT, OPT_MTU, OPT_KEYFORM, OPT_PASS,
-    OPT_CERT_CHAIN, OPT_CAPATH, OPT_NOCAPATH, OPT_CHAINCAPATH,
+    OPT_CERT_CHAIN, 
+    OPT_DCERTFORM, OPT_DCERT,
+    OPT_DKEYFORM, OPT_DPASS, OPT_DKEY, OPT_DCERT_CHAIN, 
+    OPT_CAPATH, OPT_NOCAPATH, OPT_CHAINCAPATH,
         OPT_VERIFYCAPATH,
     OPT_KEY, OPT_RECONNECT, OPT_BUILD_CHAIN, OPT_CAFILE, OPT_NOCAFILE,
     OPT_CHAINCAFILE, OPT_VERIFYCAFILE, OPT_NEXTPROTONEG, OPT_ALPN,
@@ -581,6 +584,15 @@ OPTIONS s_client_options[] = {
     {"key", OPT_KEY, 's', "Private key file to use, if not in -cert file"},
     {"keyform", OPT_KEYFORM, 'E', "Key format (PEM, DER or engine) PEM default"},
     {"pass", OPT_PASS, 's', "Private key file pass phrase source"},
+    {"dcert", OPT_DCERT, '<',
+     "Second certificate file to use (usually for DSA)"},
+    {"dcertform", OPT_DCERTFORM, 'F',
+     "Second certificate format (PEM or DER) PEM default"},
+    {"dkey", OPT_DKEY, 's',
+     "Second private key file to use (usually for DSA)"},
+    {"dkeyform", OPT_DKEYFORM, 'F',
+     "Second key format (PEM, DER or ENGINE) PEM default"},
+    {"dpass", OPT_DPASS, 's', "Second private key file pass phrase source"},
     {"CApath", OPT_CAPATH, '/', "PEM format directory of CA's"},
     {"CAfile", OPT_CAFILE, '<', "PEM format file of CA's"},
     {"no-CAfile", OPT_NOCAFILE, '-',
@@ -780,11 +792,11 @@ static void freeandcopy(char **dest, const char *source)
 int s_client_main(int argc, char **argv)
 {
     BIO *sbio;
-    EVP_PKEY *key = NULL;
+    EVP_PKEY *key = NULL, *dkey = NULL;
     SSL *con = NULL;
     SSL_CTX *ctx = NULL;
-    STACK_OF(X509) *chain = NULL;
-    X509 *cert = NULL;
+    STACK_OF(X509) *chain = NULL, *dchain = NULL;
+    X509 *cert = NULL, *dcert = NULL;
     X509_VERIFY_PARAM *vpm = NULL;
     SSL_EXCERT *exc = NULL;
     SSL_CONF_CTX *cctx = NULL;
@@ -798,6 +810,8 @@ int s_client_main(int argc, char **argv)
     char *cbuf = NULL, *sbuf = NULL;
     char *mbuf = NULL, *proxystr = NULL, *connectstr = NULL;
     char *cert_file = NULL, *key_file = NULL, *chain_file = NULL;
+    // 国密双证书
+    char *dcert_file = NULL, *dkey_file = NULL, *dchain_file = NULL;
     char *chCApath = NULL, *chCAfile = NULL, *host = NULL;
     char *port = OPENSSL_strdup(PORT);
     char *inrand = NULL;
@@ -986,6 +1000,15 @@ int s_client_main(int argc, char **argv)
             break;
         case OPT_CERT:
             cert_file = opt_arg();
+            break;
+         case OPT_DCERT:
+            dcert_file = opt_arg();
+            break;
+        case OPT_DKEY:
+            dkey_file = opt_arg();
+            break;
+        case OPT_DCERT_CHAIN:
+            dchain_file = opt_arg();
             break;
         case OPT_CRL:
             crl_file = opt_arg();
@@ -1472,6 +1495,33 @@ int s_client_main(int argc, char **argv)
         }
     }
 
+    if (dcert_file) {
+        // 读入国密加密证书
+        if (dkey_file == NULL)
+            dkey_file = dcert_file;
+
+        dkey = load_key(dkey_file, FORMAT_PEM,
+                          0, NULL, e, "second certificate private key file");
+        if (!dkey) {
+            ERR_print_errors(bio_err);
+            goto end;
+        }
+
+        dcert = load_cert(dcert_file, FORMAT_PEM,
+                            "second server certificate file");
+
+        if (!dcert) {
+            ERR_print_errors(bio_err);
+            goto end;
+        }
+        if (dchain_file) {
+            if (!load_certs(dchain_file, &dchain, FORMAT_PEM, NULL,
+                            "second server certificate chain"))
+                goto end;
+        }
+
+    }
+
     if (!load_excert(&exc))
         goto end;
 
@@ -1654,6 +1704,12 @@ int s_client_main(int argc, char **argv)
 
     if (!set_cert_key_stuff(ctx, cert, key, chain, build_chain))
         goto end;
+
+    if (dcert != NULL) {
+        // 加载国密加密证书
+        if (!set_cert_key_stuff(ctx, dcert, dkey, dchain, build_chain))
+            goto end;
+    }
 
     if (servername != NULL) {
         tlsextcbp.biodebug = bio_err;

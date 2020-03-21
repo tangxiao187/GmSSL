@@ -53,6 +53,8 @@
 #include <openssl/kdf.h>
 #include "sm2_lcl.h"
 
+int my_dump_ec_point(const EC_KEY *pkey);
+
 int SM2_KAP_CTX_init(SM2_KAP_CTX *ctx,
 	EC_KEY *ec_key, const char *id, size_t idlen,
 	EC_KEY *remote_pubkey, const char *rid, size_t ridlen,
@@ -314,6 +316,13 @@ int SM2_KAP_compute_key(SM2_KAP_CTX *ctx, const unsigned char *remote_point,
 	 * U = ht * (P + x * R)
 	 * check U != O
 	 */
+	int p_ind;
+	printf("remote_point:\n");
+        printf("len:%d\n", remote_point_len);
+        for(p_ind=0; p_ind < remote_point_len; p_ind++){
+                printf("%02x", remote_point[p_ind]);
+        }
+	printf("\n");
 
 	if (!EC_POINT_oct2point(ctx->group, ctx->point,
 		remote_point, remote_point_len, ctx->bn_ctx)) {
@@ -326,7 +335,7 @@ int SM2_KAP_compute_key(SM2_KAP_CTX *ctx, const unsigned char *remote_point,
 		ECerr(EC_F_SM2_KAP_COMPUTE_KEY, 0);
 		goto end;
 	}
-
+	// 取出对方临时公钥的x坐标
 	if (EC_METHOD_get_field_type(EC_GROUP_method_of(ctx->group)) == NID_X9_62_prime_field) {
 		if (!EC_POINT_get_affine_coordinates_GFp(ctx->group, ctx->point, x, NULL, ctx->bn_ctx)) {
 			ECerr(EC_F_SM2_KAP_COMPUTE_KEY, ERR_R_EC_LIB);
@@ -375,7 +384,7 @@ int SM2_KAP_compute_key(SM2_KAP_CTX *ctx, const unsigned char *remote_point,
 		ECerr(EC_F_SM2_KAP_COMPUTE_KEY, ERR_R_EC_LIB);
 		goto end;
 	}
-
+	// 不能是无穷远点
 	if (EC_POINT_is_at_infinity(ctx->group, ctx->point)) {
 		ECerr(EC_F_SM2_KAP_COMPUTE_KEY, 0);
 		goto end;
@@ -388,7 +397,25 @@ int SM2_KAP_compute_key(SM2_KAP_CTX *ctx, const unsigned char *remote_point,
 		ECerr(EC_F_SM2_KAP_COMPUTE_KEY, 0);
 		goto end;
 	}
-
+	int ind = 0;
+	printf("share_pt_buf:\n");
+	printf("len:%d\n", len);
+	for(ind=0; ind < len; ind++){
+		printf("%02x", share_pt_buf[ind]);
+	}
+	printf("\n");
+	printf("ctx->remote_id_dgst:\n");
+	printf("ctx->remote_id_dgstlen:%d\n", ctx->remote_id_dgstlen);
+        for(ind=0; ind < ctx->remote_id_dgstlen; ind++){
+                printf("%02x", ctx->remote_id_dgst[ind]);
+        }
+        printf("\n");
+	printf("ctx->id_dgst:\n");
+	printf("ctx->id_dgstlen:%d\n", ctx->id_dgstlen);
+        for(ind=0; ind < ctx->id_dgstlen; ind++){
+                printf("%02x", ctx->id_dgst[ind]);
+        }
+        printf("\n");
 	if (ctx->is_initiator) {
 		memcpy(share_pt_buf + len, ctx->id_dgst, ctx->id_dgstlen);
 		len += ctx->id_dgstlen;
@@ -403,12 +430,22 @@ int SM2_KAP_compute_key(SM2_KAP_CTX *ctx, const unsigned char *remote_point,
 
 	/* key = KDF(xu, yu, ZA, ZB) */
 
-
+	printf("share_pt_buf for kdf:\n");
+        printf("len:%d\n", len);
+        for(ind=0; ind < len; ind++){
+                printf("%02x", share_pt_buf[ind]);
+        }
+        printf("\n");
 	if (!ctx->kdf(share_pt_buf + 1, len - 1, key, &klen)) {
 		ECerr(EC_F_SM2_KAP_COMPUTE_KEY, 0);
 		goto end;
 	}
-
+	printf("computed_key:\n");
+        printf("klen:%d\n", klen);
+        for(ind=0; ind < klen; ind++){
+                printf("%02x", key[ind]);
+        }
+        printf("\n");
 	if (ctx->do_checksum) {
 
 		/* generate checksum S1 or SB start with 0x02
@@ -576,11 +613,195 @@ int SM2_KAP_final_check(SM2_KAP_CTX *ctx, const unsigned char *checksum,
 	return 1;
 }
 
-int SM2_compute_share_key(unsigned char *out, size_t *outlen,
-	const EC_POINT *peer_ephem, EC_KEY *ephem,
-	const EC_POINT *peer_pk, const unsigned char *peer_z, size_t peer_zlen,
+// out, outlen 生成的共享密钥
+// peer_ephem 对方临时公钥
+// ephem 己方临时公私钥
+// peer_pk 对方公钥
+// peer_z, peer_zlen 对方Z值
+// z, zlen 己方Z值
+// sk 己方公私钥
+// initiator 是否为发起方
+
+int SM2_compute_share_key(unsigned char *out, size_t outlen,
+	const EC_KEY *peer_ephem, EC_KEY *ephem,
+	const EC_KEY *peer_pk, const unsigned char *peer_z, size_t peer_zlen,
 	const unsigned char *z, size_t zlen, EC_KEY *sk, int initiator)
 {
-	memset(out, 1, *outlen);
-	return 1;
+	// 参与运算的椭圆曲线系统参数
+	// 服务器做发起方: ZA, ZB, dA, PA, PB, rA, RB
+	// 客户端做响应方: ZA, ZB, dB, PA, PB, rB, RA
+	int ret = 0;
+	// Key Agreement Protocol Context
+	SM2_KAP_CTX ctx;
+	memset(&ctx, 0, sizeof(ctx));
+
+	ctx.point_form = SM2_DEFAULT_POINT_CONVERSION_FORM;
+	ctx.id_dgst_md = EVP_sm3();
+	ctx.kdf_md = EVP_sm3();
+	ctx.checksum_md = EVP_sm3();
+	ctx.is_initiator = initiator;
+	ctx.id_dgstlen = zlen;
+	ctx.remote_id_dgstlen = peer_zlen;
+	memcpy(ctx.id_dgst, z, zlen);
+	memcpy(ctx.remote_id_dgst, peer_z, peer_zlen);
+	int ind;
+	printf("ctx.id_dgst:\n");
+        printf("zlen:%d\n", zlen);
+        for(ind=0; ind < zlen; ind++){
+                printf("%02x", ctx.id_dgst[ind]);
+        }
+        printf("\n");
+	printf("ctx.remote_id_dgst:\n");
+        printf("klen:%d\n", peer_zlen);
+        for(ind=0; ind < peer_zlen; ind++){
+                printf("%02x", ctx.remote_id_dgst[ind]);
+        }
+        printf("\n");
+	
+
+	if (!(ctx.kdf = KDF_get_x9_63(ctx.kdf_md))) {
+		ECerr(EC_F_SM2_KAP_CTX_INIT, EC_R_INVALID_KDF_MD);
+		goto end;
+	}
+
+	// 己方公私钥和对方公钥写入ctx
+	if (EC_GROUP_cmp(EC_KEY_get0_group(sk),
+		EC_KEY_get0_group(peer_pk), NULL) != 0) {
+		ECerr(EC_F_SM2_KAP_CTX_INIT, 0);
+		goto end;
+	}
+
+	if (!(ctx.ec_key = EC_KEY_dup(sk))) {
+		ECerr(EC_F_SM2_KAP_CTX_INIT, ERR_R_EC_LIB);
+		goto end;
+	}
+
+	if (!(ctx.remote_pubkey = EC_KEY_dup(peer_pk))) {
+		ECerr(EC_F_SM2_KAP_CTX_INIT, 0);
+		goto end;
+	}
+
+
+	// 分配椭圆曲线的参数
+	ctx.group = EC_KEY_get0_group(sk);
+	ctx.bn_ctx = BN_CTX_new();
+	ctx.order = BN_new();
+	ctx.two_pow_w = BN_new();
+	ctx.t = BN_new();
+
+	if (!ctx.bn_ctx || !ctx.order || !ctx.two_pow_w || !ctx.t) {
+		ECerr(EC_F_SM2_KAP_CTX_INIT, ERR_R_BN_LIB);
+		goto end;
+	}
+
+	if (!EC_GROUP_get_order(EC_KEY_get0_group(sk), ctx.order, ctx.bn_ctx)) {
+		ECerr(EC_F_SM2_KAP_CTX_INIT, ERR_R_EC_LIB);
+		goto end;
+	}
+	// order为基点G的阶, w为位数
+	int w = (BN_num_bits(ctx.order) + 1)/2 - 1;
+
+	if (!BN_one(ctx.two_pow_w)) {
+		ECerr(EC_F_SM2_KAP_CTX_INIT, ERR_R_BN_LIB);
+		goto end;
+	}
+	// 2^w
+	if (!BN_lshift(ctx.two_pow_w, ctx.two_pow_w, w)) {
+		ECerr(EC_F_SM2_KAP_CTX_INIT, ERR_R_BN_LIB);
+		goto end;
+	}
+
+	if (!(ctx.point = EC_POINT_new(ctx.group))) {
+		ECerr(EC_F_SM2_KAP_CTX_INIT, ERR_R_EC_LIB);
+		goto end;
+	}
+
+	BIGNUM *h = BN_new();
+	BIGNUM *x = BN_new();
+	// 取出己方临时公私钥的私钥参与运算
+	const BIGNUM *r = EC_KEY_get0_private_key(ephem);
+	
+	if (!h || !r || !x) {
+		ECerr(EC_F_SM2_KAP_PREPARE, 0);
+		goto end;
+	}
+
+	if (EC_METHOD_get_field_type(EC_GROUP_method_of(ctx.group)) == NID_X9_62_prime_field) {
+		if (!EC_POINT_get_affine_coordinates_GFp(ctx.group, EC_KEY_get0_public_key(ephem), x, NULL, ctx.bn_ctx)) {
+			ECerr(EC_F_SM2_KAP_PREPARE, ERR_R_EC_LIB);
+			goto end;
+		}
+	} else {
+		if (!EC_POINT_get_affine_coordinates_GF2m(ctx.group, EC_KEY_get0_public_key(ephem), x, NULL, ctx.bn_ctx)) {
+			ECerr(EC_F_SM2_KAP_PREPARE, ERR_R_EC_LIB);
+			goto end;
+		}
+	}
+
+	/*
+	 * w = ceil(keybits / 2) - 1
+	 * x = 2^w + (x and (2^w - 1)) = 2^w + (x mod 2^w)
+	 * t = (d + x * r) mod n
+	 * t = (h * t) mod n
+	 */
+
+	// x mod 2^w
+	if (!BN_nnmod(x, x, ctx.two_pow_w, ctx.bn_ctx)) {
+		ECerr(EC_F_SM2_KAP_PREPARE, ERR_R_BN_LIB);
+		goto end;
+	}
+	// 2^w + (x mod 2^w)
+	if (!BN_add(x, x, ctx.two_pow_w)) {
+		ECerr(EC_F_SM2_KAP_PREPARE, ERR_R_BN_LIB);
+		goto end;
+	}
+	// x * r
+	if (!BN_mod_mul(ctx.t, x, r, ctx.order, ctx.bn_ctx)) {
+		ECerr(EC_F_SM2_KAP_PREPARE, ERR_R_BN_LIB);
+		goto end;
+	}
+
+	const BIGNUM *prikey;
+	if (!(prikey = EC_KEY_get0_private_key(ctx.ec_key))) {
+		ECerr(EC_F_SM2_KAP_PREPARE, EC_R_SM2_KAP_NOT_INITED);
+		return 0;
+	}
+	// t = (d + x * r) mod n
+	if (!BN_mod_add(ctx.t, ctx.t, prikey, ctx.order, ctx.bn_ctx)) {
+		ECerr(EC_F_SM2_KAP_PREPARE, ERR_R_BN_LIB);
+		goto end;
+	}
+	// h 为有限域的余因子
+	if (!EC_GROUP_get_cofactor(ctx.group, h, ctx.bn_ctx)) {
+		ECerr(EC_F_SM2_KAP_PREPARE, ERR_R_EC_LIB);
+		goto end;
+	}
+	// ctx保存 (h * t) mod n
+	if (!BN_mul(ctx.t, ctx.t, h, ctx.bn_ctx)) {
+		ECerr(EC_F_SM2_KAP_PREPARE, ERR_R_BN_LIB);
+		goto end;
+	}
+
+	// 对方临时公钥转字符串
+	unsigned char peer_ephem_oct[256];
+	size_t peer_ephem_len = 0;
+	if (!(peer_ephem_len = EC_POINT_point2oct(ctx.group, EC_KEY_get0_public_key(peer_ephem), POINT_CONVERSION_UNCOMPRESSED,
+		peer_ephem_oct, sizeof(peer_ephem_oct), ctx.bn_ctx))) {
+		ECerr(EC_F_SM2_KAP_COMPUTE_KEY, 0);
+		goto end;
+	}
+
+	unsigned char checksum[64];
+	size_t checksum_len = 64;
+	if (!SM2_KAP_compute_key(&ctx, peer_ephem_oct, peer_ephem_len, out, outlen, checksum, &checksum_len)) {
+		fprintf(stderr, "error: %s %d\n", __FILE__, __LINE__);
+		goto end;
+	}
+
+	ret = 1;
+
+end:
+	ERR_print_errors_fp(stderr);
+	SM2_KAP_CTX_cleanup(&ctx);
+	return ret;
 }

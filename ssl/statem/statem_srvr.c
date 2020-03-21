@@ -2827,7 +2827,13 @@ MSG_PROCESS_RETURN tls_process_cert_verify(SSL *s, PACKET *pkt)
     peer = s->session->peer;
     pkey = X509_get0_pubkey(peer);
     type = X509_certificate_type(peer, pkey);
+	char* peer_id;
+	if (!(peer_id = X509_NAME_oneline(X509_get_subject_name(peer), NULL, 0))) {
+		SSLerr(SSL_F_GMTLS_SM2_DERIVE, ERR_R_INTERNAL_ERROR);
+		goto f_err;
+	}
 
+	printf("tls_process_cert_verify peer_id:%s\n", peer_id);
     if (!(type & EVP_PKT_SIGN)) {
         SSLerr(SSL_F_TLS_PROCESS_CERT_VERIFY,
                SSL_R_SIGNATURE_FOR_NON_SIGNING_CERTIFICATE);

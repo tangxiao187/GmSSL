@@ -63,6 +63,7 @@
 # include <openssl/bn.h>
 # include <openssl/sm2.h>
 # include <openssl/crypto.h>
+#include <openssl/ec.h>
 
 
 static int gmtls_output_cert_chain(SSL *s, int *len, int a_idx, int k_idx)
@@ -492,17 +493,21 @@ static int gmtls_construct_ske_sm2dhe(SSL *s, unsigned char **p, int *l, int *al
 		SSLerr(SSL_F_GMTLS_CONSTRUCT_SKE_SM2DHE, ERR_R_EVP_LIB);
 		goto end;
 	}
+	/**
 	if (!(id = X509_NAME_oneline(X509_get_subject_name(x509), NULL, 0))) {
 		SSLerr(SSL_F_GMTLS_CONSTRUCT_SKE_SM2DHE, ERR_R_EVP_LIB);
 		goto end;
 	}
+	**/
 	zlen = sizeof(z);
+	id = SM2_DEFAULT_ID;
+	
 	if (!SM2_compute_id_digest(EVP_sm3(), id, strlen(id), z, &zlen,
 		EVP_PKEY_get0_EC_KEY(pkey))) {
 		SSLerr(SSL_F_GMTLS_CONSTRUCT_SKE_SM2DHE, ERR_R_SM2_LIB);
 		goto end;
 	}
-
+	
 	if (EVP_SignUpdate(md_ctx, z, zlen) <= 0
 		|| EVP_SignUpdate(md_ctx, &(s->s3->client_random[0]),
 			SSL3_RANDOM_SIZE) <= 0
@@ -537,7 +542,7 @@ end:
 	}
 	OPENSSL_free(encodedPoint);
 	EVP_MD_CTX_free(md_ctx);
-	OPENSSL_free(id);
+	//OPENSSL_free(id);
 	return ret;
 }
 
@@ -564,7 +569,8 @@ static int gmtls_process_ske_sm2dhe(SSL *s, PACKET *pkt, int *al)
 		SSLerr(SSL_F_GMTLS_PROCESS_SKE_SM2DHE, SSL_R_LENGTH_TOO_SHORT);
 		return 0;
 	}
-	if (ecparams[0] != NAMED_CURVE_TYPE || ecparams[1] != 0 || ecparams[2] != 30) {
+	// 到底是30还是249
+	if (ecparams[0] != NAMED_CURVE_TYPE || ecparams[1] != 0 || ecparams[2] != 249) {
 		*al = SSL_AD_DECODE_ERROR;
 		SSLerr(SSL_F_GMTLS_PROCESS_SKE_SM2DHE, SSL_R_WRONG_CURVE);
 		return 0;
@@ -587,7 +593,7 @@ static int gmtls_process_ske_sm2dhe(SSL *s, PACKET *pkt, int *al)
 		SSLerr(SSL_F_GMTLS_PROCESS_SKE_SM2DHE, ERR_R_EVP_LIB);
 		goto end;
 	}
-	if (s->s3->peer_tmp) {
+	if (s->s3->peer_tmp == NULL) {
 		SSLerr(SSL_F_GMTLS_PROCESS_SKE_SM2DHE, ERR_R_INTERNAL_ERROR);
 		goto end;
 	}
@@ -626,11 +632,14 @@ static int gmtls_process_ske_sm2dhe(SSL *s, PACKET *pkt, int *al)
 	}
 
 	/* prepare sm2 z value */
+	/**
 	if (!(id = X509_NAME_oneline(
 		X509_get_subject_name(s->session->peer), NULL, 0))) {
 		SSLerr(SSL_F_GMTLS_PROCESS_SKE_SM2DHE, ERR_R_EVP_LIB);
 		goto end;
 	}
+	**/
+	id = SM2_DEFAULT_ID;
 	zlen = sizeof(z);
 	if (!SM2_compute_id_digest(EVP_sm3(), id, strlen(id), z, &zlen,
 		EVP_PKEY_get0_EC_KEY(pkey))) {
@@ -668,7 +677,7 @@ static int gmtls_process_ske_sm2dhe(SSL *s, PACKET *pkt, int *al)
 
 end:
 	EVP_PKEY_CTX_free(pctx);
-	OPENSSL_free(id);
+	//OPENSSL_free(id);
 	EVP_MD_CTX_free(md_ctx);
 	return ret;
 }
@@ -745,10 +754,13 @@ static int gmtls_construct_ske_sm2(SSL *s, unsigned char **p, int *l, int *al)
 		SSLerr(SSL_F_GMTLS_CONSTRUCT_SKE_SM2, ERR_R_EVP_LIB);
 		goto end;
 	}
-	if (!(id = X509_NAME_oneline(X509_get_subject_name(x509), NULL, 0))) {
-		SSLerr(SSL_F_GMTLS_CONSTRUCT_SKE_SM2, ERR_R_EVP_LIB);
-		goto end;
-	}
+	// For connect with TASSL
+	// 使用国密标准的默认ID计算签名
+	id = SM2_DEFAULT_ID;
+	//if (!(id = X509_NAME_oneline(X509_get_subject_name(x509), NULL, 0))) {
+	//	SSLerr(SSL_F_GMTLS_CONSTRUCT_SKE_SM2, ERR_R_EVP_LIB);
+	//	goto end;
+	//}
 	zlen = sizeof(z);
 	if (!SM2_compute_id_digest(EVP_sm3(), id, strlen(id), z, &zlen,
 		EVP_PKEY_get0_EC_KEY(pkey))) {
@@ -765,18 +777,18 @@ static int gmtls_construct_ske_sm2(SSL *s, unsigned char **p, int *l, int *al)
         printf("\n");
 
         printf("C=");
-        for (i = 0; i < n; i++)
+        for (i = 0; i < n+3; i++)
             printf("%02X",buf[i]);
         printf("\n");
     }
 #endif
-
+	// 在计算服务端签名时，需要加上加密证书的长度(3字节)
 	if (EVP_SignUpdate(md_ctx, z, zlen) <= 0
 		|| EVP_SignUpdate(md_ctx, &(s->s3->client_random[0]),
 			SSL3_RANDOM_SIZE) <= 0
 		|| EVP_SignUpdate(md_ctx, &(s->s3->server_random[0]),
 			SSL3_RANDOM_SIZE) <= 0
-		|| EVP_SignUpdate(md_ctx, buf, n) <= 0) {
+		|| EVP_SignUpdate(md_ctx, buf, n+3) <= 0) {
 		SSLerr(SSL_F_GMTLS_CONSTRUCT_SKE_SM2, ERR_R_EVP_LIB);
 		goto end;
 	}
@@ -802,7 +814,7 @@ static int gmtls_construct_ske_sm2(SSL *s, unsigned char **p, int *l, int *al)
 end:
 	OPENSSL_free(buf);
 	EVP_MD_CTX_free(md_ctx);
-	OPENSSL_free(id);
+	//OPENSSL_free(id);
 	return ret;
 }
 
@@ -865,10 +877,12 @@ static int gmtls_process_ske_sm2(SSL *s, PACKET *pkt, int *al)
 	}
 
 	/* prepare sm2 z value */
-	if (!(id = X509_NAME_oneline(X509_get_subject_name(x509), NULL, 0))) {
-		SSLerr(SSL_F_GMTLS_PROCESS_SKE_SM2, ERR_R_EVP_LIB);
-		goto end;
-	}
+	// For connect with TASSL
+	id = SM2_DEFAULT_ID;  
+	//if (!(id = X509_NAME_oneline(X509_get_subject_name(x509), NULL, 0))) {
+	//	SSLerr(SSL_F_GMTLS_PROCESS_SKE_SM2, ERR_R_EVP_LIB);
+	//	goto end;
+	//}
 	zlen = sizeof(z);
 	if (!SM2_compute_id_digest(EVP_sm3(), id, strlen(id), z, &zlen,
 		EVP_PKEY_get0_EC_KEY(pkey))) {
@@ -877,7 +891,7 @@ static int gmtls_process_ske_sm2(SSL *s, PACKET *pkt, int *al)
 	}
 
 	{ int i; printf("Z="); for (i=0;i<zlen;i++) printf("%02X",z[i]); printf("\n"); }
-	{ int i; printf("C="); for (i=0;i<n;i++) printf("%02X",buf[i]); printf("\n"); }
+	{ int i; printf("C="); for (i=0;i<n+3;i++) printf("%02X",buf[i]); printf("\n"); }
 
 
 	if (EVP_VerifyUpdate(md_ctx, z, zlen) <= 0
@@ -885,7 +899,7 @@ static int gmtls_process_ske_sm2(SSL *s, PACKET *pkt, int *al)
 			SSL3_RANDOM_SIZE) <= 0
 		|| EVP_VerifyUpdate(md_ctx, &(s->s3->server_random[0]),
 			SSL3_RANDOM_SIZE) <= 0
-		|| EVP_VerifyUpdate(md_ctx, buf, n) <= 0) {
+		|| EVP_VerifyUpdate(md_ctx, buf, n+3) <= 0) {
 		SSLerr(SSL_F_GMTLS_PROCESS_SKE_SM2, ERR_R_EVP_LIB);
 		goto end;
 	}
@@ -903,7 +917,7 @@ static int gmtls_process_ske_sm2(SSL *s, PACKET *pkt, int *al)
 end:
 	OPENSSL_free(buf);
 	EVP_MD_CTX_free(md_ctx);
-	OPENSSL_free(id);
+	//OPENSSL_free(id);
 	return ret;
 }
 
@@ -1339,7 +1353,8 @@ int gmtls_construct_client_certificate(SSL *s)
 	int al = -1;
 	unsigned long alg_a = s->s3->tmp.new_cipher->algorithm_auth;
 	unsigned char *p;
-	int l;
+	// l未初始化，会导致客户端向服务器发送证书请求时，发送超长包
+	int l = 3 + SSL_HM_HEADER_LENGTH(s);
 
 	if (alg_a & SSL_aSM2) {
 		if (!gmtls_construct_sm2_certs(s, &l)) {
@@ -1387,6 +1402,18 @@ MSG_PROCESS_RETURN gmtls_process_client_certificate(SSL *s, PACKET *pkt)
 	return ret;
 }
 
+int my_dump_ec_point(const EC_KEY *pkey){
+   const EC_POINT* pub =  EC_KEY_get0_public_key(pkey);
+    BIGNUM *x = BN_new();
+    BIGNUM *y = BN_new();
+    if (EC_POINT_get_affine_coordinates_GFp(EC_KEY_get0_group(pkey), pub, x, y, NULL)) {
+        BN_print_fp(stdout, x);
+        putc('\n', stdout);
+        BN_print_fp(stdout, y);
+        putc('\n', stdout);
+    }
+}
+
 static int gmtls_sm2_derive(SSL *s, EVP_PKEY *privkey, EVP_PKEY *pubkey, int initiator)
 {
 	int ret = 0;
@@ -1399,12 +1426,12 @@ static int gmtls_sm2_derive(SSL *s, EVP_PKEY *privkey, EVP_PKEY *pubkey, int ini
 	EVP_PKEY *peer_pkey;
 	EC_KEY *peer_pk;
 	char *id = NULL;
-	unsigned char z[EVP_MAX_MD_SIZE];
-	size_t zlen;
+	unsigned char z[EVP_MAX_MD_SIZE] = {1};
+	// 需要初始化,否则在SM2_compute_id_digest出现buffer too small
+	size_t zlen = EVP_MAX_MD_SIZE;
 	char *peer_id = NULL;
-	unsigned char peer_z[EVP_MAX_MD_SIZE];
-	size_t peer_zlen;
-	unsigned char *pms = NULL;
+	unsigned char peer_z[EVP_MAX_MD_SIZE] = {1};
+	size_t peer_zlen = EVP_MAX_MD_SIZE;
 	size_t pmslen;
 
 	if (!(peer_ephem = EVP_PKEY_get0_EC_KEY(pubkey))) {
@@ -1429,48 +1456,72 @@ static int gmtls_sm2_derive(SSL *s, EVP_PKEY *privkey, EVP_PKEY *pubkey, int ini
 		SSLerr(SSL_F_GMTLS_SM2_DERIVE, ERR_R_INTERNAL_ERROR);
 		return 0;
 	}
-
-	if (!(peer_x509 = sk_X509_value(s->session->peer_chain, 1))) {
+	// 客户端第一本证书是CA
+	if (!(peer_x509 = sk_X509_value(s->session->peer_chain, 1 - initiator))) {
 		SSLerr(SSL_F_GMTLS_SM2_DERIVE, ERR_R_INTERNAL_ERROR);
 		return 0;
 	}
-	peer_pkey = X509_get0_pubkey(x509);
-	if (!(peer_pk = EVP_PKEY_get0_EC_KEY(pkey))) {
+	peer_pkey = X509_get0_pubkey(peer_x509);
+	if (!(peer_pk = EVP_PKEY_get0_EC_KEY(peer_pkey))) {
 		SSLerr(SSL_F_GMTLS_SM2_DERIVE, ERR_R_INTERNAL_ERROR);
 		return 0;
 	}
 
 	/* generate z values */
+	/**
 	if (!(id = X509_NAME_oneline(X509_get_subject_name(x509), NULL, 0))) {
 		SSLerr(SSL_F_GMTLS_SM2_DERIVE, ERR_R_INTERNAL_ERROR);
 		return 0;
 	}
+	**/
+	id = SM2_DEFAULT_ID;
+	peer_id = SM2_DEFAULT_ID;
 	if (!SM2_compute_id_digest(EVP_sm3(), id, strlen(id), z, &zlen, sk)) {
 		SSLerr(SSL_F_GMTLS_SM2_DERIVE, ERR_R_INTERNAL_ERROR);
 		goto end;
 	}
-
-	if (!(peer_id = X509_NAME_oneline(X509_get_subject_name(x509), NULL, 0))) {
+	/**
+	if (!(peer_id = X509_NAME_oneline(X509_get_subject_name(peer_x509), NULL, 0))) {
 		SSLerr(SSL_F_GMTLS_SM2_DERIVE, ERR_R_INTERNAL_ERROR);
 		goto end;
 	}
+	**/
 	if (!SM2_compute_id_digest(EVP_sm3(), peer_id, strlen(peer_id),
 		peer_z, &peer_zlen, peer_pk)) {
 		SSLerr(SSL_F_GMTLS_SM2_DERIVE, ERR_R_INTERNAL_ERROR);
 		goto end;
 	}
-
-	// how to set pmslen ??
+	//zlen = 64;
+	//peer_zlen = 64;
+	printf("myid:%s\n", id);
+	printf("peerid:%s\n", peer_id);
 	pmslen = 48;
-
+	// pms不能为空指针
+	unsigned char *pms = NULL;
+	pms = OPENSSL_malloc(pmslen);
+	if(pms == NULL){
+		SSLerr(SSL_F_GMTLS_SM2_DERIVE, ERR_R_INTERNAL_ERROR);
+		goto end;
+	}
+	memset(pms, 0, pmslen);
+	my_dump_ec_point(peer_ephem);
+	my_dump_ec_point(ephem);
+	my_dump_ec_point(peer_pk);
+	my_dump_ec_point(sk);
 	/* sm2 key exchange */
-	if (!SM2_compute_share_key(pms, &pmslen,
-		EC_KEY_get0_public_key(peer_ephem), ephem,
-		EC_KEY_get0_public_key(peer_pk), peer_z, sizeof(peer_z),
+	// 此函数未实现, 见issue #662
+	if (!SM2_compute_share_key(pms, pmslen,
+		peer_ephem, ephem,
+		peer_pk, peer_z, sizeof(peer_z),
 		z, sizeof(z), sk, initiator)) {
 		SSLerr(SSL_F_GMTLS_SM2_DERIVE, ERR_R_INTERNAL_ERROR);
 		goto end;
 	}
+	printf("pre shared master:\n");
+	int i;
+	for (i = 0; i< pmslen; i++)
+            printf("%02X",pms[i]);
+        printf("\n");
 
 	if (s->server) {
 		ret = ssl_generate_master_secret(s, pms, pmslen, 1);
@@ -1483,10 +1534,12 @@ static int gmtls_sm2_derive(SSL *s, EVP_PKEY *privkey, EVP_PKEY *pubkey, int ini
 	}
 
 end:
-	OPENSSL_free(id);
-	OPENSSL_free(peer_id);
+	//OPENSSL_free(id);
+	//OPENSSL_free(peer_id);
 	return ret;
 }
+
+
 
 static int gmtls_construct_cke_sm2dhe(SSL *s, unsigned char **p, int *l, int *al)
 {
@@ -1558,7 +1611,7 @@ static int gmtls_process_cke_sm2dhe(SSL *s, PACKET *pkt, int *al)
 		SSLerr(SSL_F_GMTLS_PROCESS_CKE_SM2DHE, SSL_R_LENGTH_TOO_SHORT);
 		return 0;
 	}
-	if (ecparams[0] != NAMED_CURVE_TYPE || ecparams[1] != 0 || ecparams[2] != 30) {
+	if (ecparams[0] != NAMED_CURVE_TYPE || ecparams[1] != 0 || ecparams[2] != 249) {
 		*al = SSL_AD_DECODE_ERROR;
 		SSLerr(SSL_F_GMTLS_PROCESS_CKE_SM2DHE, SSL_R_WRONG_CURVE);
 		return 0;
