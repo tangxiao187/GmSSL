@@ -17,8 +17,8 @@
 #endif
 #include "internal/evp_int.h"
 
-int EVP_VerifyFinal(EVP_MD_CTX *ctx, const unsigned char *sigbuf,
-                    unsigned int siglen, EVP_PKEY *pkey)
+int EVP_VerifyFinal_ex(EVP_MD_CTX *ctx, const unsigned char *sigbuf,
+                    unsigned int siglen, EVP_PKEY *pkey, int need_compute_dsgt)
 {
     unsigned char m[EVP_MAX_MD_SIZE];
     unsigned int m_len = 0;
@@ -59,6 +59,23 @@ int EVP_VerifyFinal(EVP_MD_CTX *ctx, const unsigned char *sigbuf,
 # endif
         if (EVP_PKEY_CTX_set_ec_scheme(pkctx, NID_sm_scheme) <= 0) {
             goto err;
+        }
+        // 此处计算SM2验签的Z值
+        if(need_compute_dsgt){
+            char *id = SM2_DEFAULT_ID;
+            unsigned char m1[EVP_MAX_MD_SIZE];
+            unsigned int m1_len = 0;
+            if (!SM2_compute_message_digest(EVP_MD_CTX_md(ctx), EVP_MD_CTX_md(ctx),
+                (const unsigned char *)m, m_len, id, strlen(id), m1, &m1_len, 
+                EVP_PKEY_get0_EC_KEY(pkey)) ) {
+                fprintf(stderr, "error: %s %d\n", __FUNCTION__, __LINE__);
+                goto err;
+            }
+            int i = 0;
+            for(; i< EVP_MAX_MD_SIZE; i++){
+                m[i] = m1[i];
+            }
+            m_len = m1_len;
         }
     }
 #endif

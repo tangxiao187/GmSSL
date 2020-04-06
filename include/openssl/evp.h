@@ -647,11 +647,14 @@ __owur int EVP_CipherFinal(EVP_CIPHER_CTX *ctx, unsigned char *outm,
 __owur int EVP_CipherFinal_ex(EVP_CIPHER_CTX *ctx, unsigned char *outm,
                               int *outl);
 
-__owur int EVP_SignFinal(EVP_MD_CTX *ctx, unsigned char *md, unsigned int *s,
-                         EVP_PKEY *pkey);
+__owur int EVP_SignFinal_ex(EVP_MD_CTX *ctx, unsigned char *md, unsigned int *s,
+                         EVP_PKEY *pkey, int need_compute_dsgt);
 
-__owur int EVP_VerifyFinal(EVP_MD_CTX *ctx, const unsigned char *sigbuf,
-                           unsigned int siglen, EVP_PKEY *pkey);
+__owur int EVP_VerifyFinal_ex(EVP_MD_CTX *ctx, const unsigned char *sigbuf,
+                           unsigned int siglen, EVP_PKEY *pkey, int need_compute_dsgt);
+// c语言不支持默认参数, 用宏实现
+#define EVP_SignFinal(ctx, md, s, pkey) EVP_SignFinal_ex(ctx, md, s, pkey, 0)
+#define EVP_VerifyFinal(ctx, sigbuf, siglen, pkey) EVP_VerifyFinal_ex(ctx, sigbuf, siglen, pkey, 0)
 
 /*__owur*/ int EVP_DigestSignInit(EVP_MD_CTX *ctx, EVP_PKEY_CTX **pctx,
                                   const EVP_MD *type, ENGINE *e,

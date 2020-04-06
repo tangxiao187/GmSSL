@@ -2942,7 +2942,7 @@ MSG_PROCESS_RETURN tls_process_cert_verify(SSL *s, PACKET *pkt)
         goto f_err;
     }
 
-    if (EVP_VerifyFinal(mctx, data, len, pkey) <= 0) {
+    if (EVP_VerifyFinal_ex(mctx, data, len, pkey, 1) <= 0) {
         al = SSL_AD_DECRYPT_ERROR;
         SSLerr(SSL_F_TLS_PROCESS_CERT_VERIFY, SSL_R_BAD_SIGNATURE);
         goto f_err;

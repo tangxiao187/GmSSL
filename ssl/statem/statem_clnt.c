@@ -2796,7 +2796,7 @@ int tls_construct_client_verify(SSL *s)
             && !EVP_MD_CTX_ctrl(mctx, EVP_CTRL_SSL3_MASTER_SECRET,
                                 s->session->master_key_length,
                                 s->session->master_key))
-        || !EVP_SignFinal(mctx, p + 2, &u, pkey)) {
+        || !EVP_SignFinal_ex(mctx, p + 2, &u, pkey, 1)) {
         SSLerr(SSL_F_TLS_CONSTRUCT_CLIENT_VERIFY, ERR_R_EVP_LIB);
         goto err;
     }

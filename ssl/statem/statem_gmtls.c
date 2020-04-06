@@ -656,6 +656,7 @@ static int gmtls_process_ske_sm2dhe(SSL *s, PACKET *pkt, int *al)
 		SSLerr(SSL_F_GMTLS_PROCESS_SKE_SM2DHE, ERR_R_EVP_LIB);
 		goto end;
 	}
+	// z值放到EVP_VerifyFinal中添加
 	if (EVP_VerifyUpdate(md_ctx, z, zlen) <= 0
 		|| EVP_VerifyUpdate(md_ctx, &(s->s3->client_random[0]),
 			SSL3_RANDOM_SIZE) <= 0
@@ -1509,11 +1510,10 @@ static int gmtls_sm2_derive(SSL *s, EVP_PKEY *privkey, EVP_PKEY *pubkey, int ini
 	my_dump_ec_point(peer_pk);
 	my_dump_ec_point(sk);
 	/* sm2 key exchange */
-	// 此函数未实现, 见issue #662
 	if (!SM2_compute_share_key(pms, pmslen,
 		peer_ephem, ephem,
-		peer_pk, peer_z, sizeof(peer_z),
-		z, sizeof(z), sk, initiator)) {
+		peer_pk, peer_z, peer_zlen,
+		z, zlen, sk, initiator)) {
 		SSLerr(SSL_F_GMTLS_SM2_DERIVE, ERR_R_INTERNAL_ERROR);
 		goto end;
 	}
